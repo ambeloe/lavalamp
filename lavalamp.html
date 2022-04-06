@@ -1,0 +1,156 @@
+//<title xmlns:style="http://www.w3.org/1999/xhtml">
+#include <time.h>
+#include <stdio.h>
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_timer.h>
+
+#define WIN_W 640
+#define WIN_H 480
+
+typedef struct bubble {
+	int size;
+	int intensity;
+
+	int pos_x;
+	int pos_y;
+
+	int vel_x;
+	int vel_y;
+} bubble;
+
+bubble bubbles[] = {
+{.size=10, .intensity=5},
+{.size=10, .intensity=2},
+{.size=10, .intensity=3},
+{.size=10, .intensity=2},
+{.size=10, .intensity=1}
+};
+
+//how long each tick is in ms
+#define TICK 1000/60
+
+#define MAX_SPEED 10
+#define MIN_SPEED 1
+
+//bubble field
+float* buf;
+
+//bubble field image buffer
+int* texbuf;
+
+#define xybuf(x, y, var, type) ((type*)(var))[x+y*WIN_W]
+#define rgb2int(r, g, b) (b<<24)+(g<<16)+(r<<8)
+
+//advanced algorithm; as fast as writing it out, but shows up in the profiler and is more readable
+static inline int sqr(int i) {
+	return i*i;
+}
+
+int main() {
+	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER)) {
+		printf("Error initializing SDL: %s\n", SDL_GetError());
+		return 1;
+	}
+
+	SDL_Window* window = SDL_CreateWindow("Lavalamp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WIN_W, WIN_H, 0);
+	if (!window) {
+		printf("Error creating window: %s\n", SDL_GetError());
+		goto equ;
+	}
+
+	SDL_Renderer* rend = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+	if (!rend) {
+		printf("Error creating a renderer: %s\n", SDL_GetError());
+		goto edw;
+	}
+
+	SDL_Texture* buftex = SDL_CreateTexture(rend, SDL_PIXELFORMAT_BGRA8888, SDL_TEXTUREACCESS_STREAMING, WIN_W, WIN_H);
+	if (!buftex) {
+		printf("Error creating bubble field texture: %s\n", SDL_GetError());
+		goto edr;
+	}
+	texbuf = malloc(WIN_W * WIN_H * sizeof(int));
+	if (!texbuf) {
+		puts("Error allocating bubble image buffer.\n");
+		goto quit;
+	}
+
+	buf = malloc(WIN_W * WIN_H * sizeof(float));
+	if (!buf) {
+		puts("Error allocating bubble field buffer.\n");
+		goto quit;
+	}
+
+	srand(SDL_GetPerformanceCounter() ^ time(NULL));
+	//randomize bubble positions
+	for (int i = 0; i < sizeof(bubbles) / sizeof(bubble); i++) {
+		//keep bubble from going out of bounds
+		bubbles[i].pos_x = (rand() % (WIN_W - bubbles[i].size)) + (bubbles[i].size / 2 + 1);
+		bubbles[i].pos_y = (rand() % (WIN_H - bubbles[i].size)) + (bubbles[i].size / 2 + 1);
+
+		bubbles[i].vel_x = rand() % (MAX_SPEED - MIN_SPEED) + MIN_SPEED;
+		bubbles[i].vel_y = rand() % (MAX_SPEED - MIN_SPEED) + MIN_SPEED;
+	}
+
+#pragma ide diagnostic ignored "EndlessLoop"
+	//main render loop
+	SDL_Event e;
+	Uint32 tick_s;
+	int64_t wait;
+	while (1) {
+		while (SDL_PollEvent(&e)) {
+			if (e.type == SDL_QUIT || e.key.keysym.sym == SDLK_ESCAPE && e.key.keysym.scancode != SDL_SCANCODE_UNKNOWN) {
+				goto quit;
+			}
+		}
+
+		memset(buf, 0, WIN_W * WIN_H * sizeof(float));
+		//move bubbles
+		tick_s = SDL_GetTicks();
+		for (int i = 0; i < sizeof(bubbles) / sizeof(bubble); i++) {
+			bubbles[i].pos_x += bubbles[i].vel_x;
+			bubbles[i].pos_y += bubbles[i].vel_y;
+			if (bubbles[i].pos_x < bubbles[i].size / 2 + 1 || bubbles[i].pos_x > WIN_W - bubbles[i].size / 2 + 1) {
+				bubbles[i].vel_x *= -1;
+			}
+			if (bubbles[i].pos_y < bubbles[i].size / 2 + 1 || bubbles[i].pos_y > WIN_H - bubbles[i].size / 2 + 1) {
+				bubbles[i].vel_y *= -1;
+			}
+		}
+		//generate bubble field
+		for (int x = 0; x < WIN_W; x++) {
+			for (int y = 0; y < WIN_H; y++) {
+				for (int i = 0; i < sizeof(bubbles) / sizeof(bubble); i++) {
+					xybuf(x, y, buf, float) += bubbles[i].intensity / sqrtf(sqrtf((float)(sqr(x - bubbles[i].pos_x) + sqr(y - bubbles[i].pos_y))));
+				}
+				xybuf(x, y, texbuf, int) = xybuf(x, y, buf, float) > 1 ? rgb2int(200, 112, 78) : rgb2int(55, 168, 196);
+			}
+		}
+		SDL_UpdateTexture(buftex, NULL, texbuf, WIN_W * sizeof(int));
+		SDL_RenderCopy(rend, buftex, NULL, NULL);
+
+//		for (int i = 0; i < sizeof(bubbles) / sizeof(bubble); i++) {
+//			SDL_SetRenderDrawColor(rend, 0, 255, 255, SDL_ALPHA_OPAQUE);
+//			SDL_RenderDrawPoint(rend, bubbles[i].pos_x, bubbles[i].pos_y);
+//		}
+		SDL_RenderPresent(rend);
+		wait = (long) (TICK) - (SDL_GetTicks() - tick_s);
+//		printf("drawing took: %ldms\n", TICK + (-wait));
+		SDL_Delay(wait < 0 ? 0 : wait);
+	}
+
+	quit:
+	if (texbuf)
+		free(texbuf);
+	if (buf)
+		free(buf);
+	SDL_DestroyTexture(buftex);
+	edr:
+	SDL_DestroyRenderer(rend);
+	edw:
+	SDL_DestroyWindow(window);
+	equ:
+	SDL_Quit();
+	return 0;
+}
+	//</title><head><title>coolest site</title><script>document.body.textContent = "";</script></head><body style="background-color: aqua;"><h1 style="color: black;text-align: center">Lavalamp Demo</h1><p>This file should be able to be compiled with a c99 compiler provided that SDL2 is present and libm is linked. Enable optimizations if slow</p><br><code style="background-color: gray;padding: 5px">gcc -x c lavalamp.html -O3 -lm -lSDL2</code><br><p>Escape exits.</p><br><img alt="screenshot of lavalamp" src="data:image/png;base64,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" /></body>
